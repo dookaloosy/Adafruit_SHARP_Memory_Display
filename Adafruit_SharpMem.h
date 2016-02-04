@@ -16,17 +16,32 @@ BSD license, check license.txt for more information
 All text above, and the splash screen must be included in any redistribution
 *********************************************************************/
 
+#ifndef _ADAFRUIT_SHARPMEM_H_
+#define _ADAFRUIT_SHARPMEM_H_
+
 #if ARDUINO >= 100
  #include "Arduino.h"
 #else
  #include "WProgram.h"
 #endif
  
-#include <Adafruit_GFX.h>
 #ifdef __AVR
   #include <avr/pgmspace.h>
 #elif defined(ESP8266)
   #include <pgmspace.h>
+#endif
+
+#include <Adafruit_GFX.h>
+#include <SPI.h>
+
+#define SPI_CS_ENABLE()           digitalWrite(_ss, HIGH)
+#define SPI_CS_DISABLE()          digitalWrite(_ss, LOW)		// Sharp memory display uses opposite CS polarity: LOW = de-assert, HIGH = assert
+#define SPI_DEFAULT_DELAY_US      6
+
+#if defined(ARDUINO_SAMD_ZERO) && defined(SERIAL_PORT_USBVIRTUAL) 
+#define SerialDebug SERIAL_PORT_USBVIRTUAL
+#else
+#define SerialDebug Serial
 #endif
 
 // LCD Dimensions
@@ -35,18 +50,36 @@ All text above, and the splash screen must be included in any redistribution
 
 class Adafruit_SharpMem : public Adafruit_GFX {
  public:
-  Adafruit_SharpMem(uint8_t clk, uint8_t mosi, uint8_t ss);
+  // Constructor
+  Adafruit_SharpMem(int8_t ss);
+  Adafruit_SharpMem(int8_t clk, int8_t mosi, int8_t ss);
+  
+  // HW initialisation
   void begin(void);
+  void end(void);
+  
+  // Methods
   void drawPixel(int16_t x, int16_t y, uint16_t color);
   uint8_t getPixel(uint16_t x, uint16_t y);
-  void clearDisplay();
+  void clearDisplay(void);
+  void clearBuffer(void);
   void refresh(void);
+  void toggleVcom(void);
 
  private:
-  uint8_t _ss, _clk, _mosi;
+  int8_t _ss, _clk, _mosi, _sharpmem_vcom;
+
+#if defined __AVR__
+  // 8-bit processors
   volatile uint8_t *dataport, *clkport;
-  uint8_t _sharpmem_vcom, datapinmask, clkpinmask;
-  
+  uint8_t datapinmask, clkpinmask;
+#else
+  // 32-bit processors
+  volatile uint32_t *dataport, *clkport;
+  uint32_t datapinmask, clkpinmask;
+#endif
+
   void sendbyte(uint8_t data);
-  void sendbyteLSB(uint8_t data);
 };
+
+#endif /* _ADAFRUIT_SHARPMEM_H_ */

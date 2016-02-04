@@ -19,12 +19,18 @@ All text above, and the splash screen must be included in any redistribution
 #include <Adafruit_GFX.h>
 #include <Adafruit_SharpMem.h>
 
-// any pins can be used
-#define SCK 10
-#define MOSI 11
-#define SS 13
+// Create the sharpmem object, either ...uncomment these lines
+/* ...hardware SPI, using SCK/MOSI hardware SPI pins and then user selected CS */
+/* Define the CS pin, any GPIO pin can be used */
+#define SS 11
+Adafruit_SharpMem display(SS);
 
-Adafruit_SharpMem display(SCK, MOSI, SS);
+/* ...software SPI, using SCK/MOSI/MISO user-defined SPI pins and then user selected CS */
+/* Define the SCK, MOSI and SS pins */
+// #define SCK 24
+// #define MOSI 23
+// #define SS 11
+// Adafruit_SharpMem display(SCK, MOSI, SS);
 
 #define BLACK 0
 #define WHITE 1

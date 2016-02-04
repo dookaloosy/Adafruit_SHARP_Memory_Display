@@ -42,50 +42,111 @@ All text above, and the splash screen must be included in any redistribution
 
  **************************************************************************/
 
-#define SHARPMEM_BIT_WRITECMD   (0x80)
-#define SHARPMEM_BIT_VCOM       (0x40)
-#define SHARPMEM_BIT_CLEAR      (0x20)
+#define SHARPMEM_BIT_DUMMY      0x00
+#define SHARPMEM_BIT_WRITECMD   0x01
+#define SHARPMEM_BIT_VCOM       0x02
+#define SHARPMEM_BIT_CLEAR      0x04
 #define TOGGLE_VCOM             do { _sharpmem_vcom = _sharpmem_vcom ? 0x00 : SHARPMEM_BIT_VCOM; } while(0);
 
 byte sharpmem_buffer[(SHARPMEM_LCDWIDTH * SHARPMEM_LCDHEIGHT) / 8];
 
+// Sharp memory display takes LSB first, but we'll do the byte-flipping in software
+// Despite what it says on the datasheet, the display can accept up to 48MHz clock
+SPISettings sharpmemSPI(48000000, LSBFIRST, SPI_MODE0);
+
 /* ************* */
 /* CONSTRUCTORS  */
 /* ************* */
-Adafruit_SharpMem::Adafruit_SharpMem(uint8_t clk, uint8_t mosi, uint8_t ss) :
+
+/******************************************************************************/
+/*!
+    @brief Instantiates a new instance of the Adafruit_SharpMem class
+
+    @param[in]  ss
+                The location of the CS pin for the SPI interface
+*/
+/******************************************************************************/
+Adafruit_SharpMem::Adafruit_SharpMem(int8_t ss) :
+Adafruit_GFX(SHARPMEM_LCDWIDTH, SHARPMEM_LCDHEIGHT) {
+  _ss = ss;
+  _mosi = _clk = -1;
+
+  // Set pin state before direction to make sure they start this way (no glitching)
+  SPI_CS_DISABLE();
+  pinMode(_ss, OUTPUT);
+  
+  // Set the vcom bit to a defined state
+  _sharpmem_vcom = SHARPMEM_BIT_VCOM;
+}
+
+/******************************************************************************/
+/*!
+    @brief Instantiates a new instance of the Adafruit_SharpMem class
+           using software SPI
+
+    @param[in]  clk
+                The location of the SCK/clock pin for the SPI interface
+    @param[in]  mosi
+                The location of the MOSI pin for the SPI interface
+    @param[in]  ss
+                The location of the CS pin for the SPI interface
+*/
+/******************************************************************************/
+Adafruit_SharpMem::Adafruit_SharpMem(int8_t clk, int8_t mosi, int8_t ss) :
 Adafruit_GFX(SHARPMEM_LCDWIDTH, SHARPMEM_LCDHEIGHT) {
   _clk = clk;
   _mosi = mosi;
   _ss = ss;
 
   // Set pin state before direction to make sure they start this way (no glitching)
-  digitalWrite(_ss, HIGH);  
-  digitalWrite(_clk, LOW);  
-  digitalWrite(_mosi, HIGH);  
+  SPI_CS_DISABLE();
+  digitalWrite(_clk, LOW);
+  digitalWrite(_mosi, HIGH);
   
   pinMode(_ss, OUTPUT);
   pinMode(_clk, OUTPUT);
   pinMode(_mosi, OUTPUT);
-  
-  clkport     = portOutputRegister(digitalPinToPort(_clk));
-  clkpinmask  = digitalPinToBitMask(_clk);
-  dataport    = portOutputRegister(digitalPinToPort(_mosi));
-  datapinmask = digitalPinToBitMask(_mosi);
-  
+
   // Set the vcom bit to a defined state
   _sharpmem_vcom = SHARPMEM_BIT_VCOM;
-
 }
 
+/******************************************************************************/
+/*!
+    @brief Initialize the HW to enable communication with the display
+*/
+/******************************************************************************/
 void Adafruit_SharpMem::begin() {
-  setRotation(2);
+  setRotation(0);
+
+  if (_clk == -1) {
+    // setup hardware SPI
+    SPI.begin();
+  } else {
+    // setup software SPI
+    clkport     = portOutputRegister(digitalPinToPort(_clk));
+    clkpinmask  = digitalPinToBitMask(_clk);
+    dataport    = portOutputRegister(digitalPinToPort(_mosi));
+    datapinmask = digitalPinToBitMask(_mosi);
+  }
+}
+
+/******************************************************************************/
+/*!
+    @brief  Uninitializes the SPI interface
+*/
+/******************************************************************************/
+void Adafruit_SharpMem::end(void)
+{
+    if (_clk == -1) {
+      SPI.end();
+    }
 }
 
 /* *************** */
 /* PRIVATE METHODS */
 /* *************** */
 
- 
 /**************************************************************************/
 /*!
     @brief  Sends a single byte in pseudo-SPI.
@@ -93,33 +154,13 @@ void Adafruit_SharpMem::begin() {
 /**************************************************************************/
 void Adafruit_SharpMem::sendbyte(uint8_t data) 
 {
-  uint8_t i = 0;
-
-  // LCD expects LSB first
-  for (i=0; i<8; i++) 
-  { 
-    // Make sure clock starts low
-    //digitalWrite(_clk, LOW);
-    *clkport &= ~clkpinmask;
-    if (data & 0x80) 
-      //digitalWrite(_mosi, HIGH);
-      *dataport |=  datapinmask;
-    else 
-      //digitalWrite(_mosi, LOW);
-      *dataport &= ~datapinmask;
-
-    // Clock is active high
-    //digitalWrite(_clk, HIGH);
-    *clkport |=  clkpinmask;
-    data <<= 1; 
+  // Hardware SPI
+  if (_clk == -1) {
+    SPI.transfer(data);
+    return;
   }
-  // Make sure clock ends low
-  //digitalWrite(_clk, LOW);
-  *clkport &= ~clkpinmask;
-}
 
-void Adafruit_SharpMem::sendbyteLSB(uint8_t data) 
-{
+  // Software SPI using original Adafruit code
   uint8_t i = 0;
 
   // LCD expects LSB first
@@ -143,14 +184,17 @@ void Adafruit_SharpMem::sendbyteLSB(uint8_t data)
   //digitalWrite(_clk, LOW);
   *clkport &= ~clkpinmask;
 }
+
 /* ************** */
 /* PUBLIC METHODS */
 /* ************** */
 
-// 1<<n is a costly operation on AVR -- table usu. smaller & faster
-static const uint8_t PROGMEM
-  set[] = {  1,  2,  4,  8,  16,  32,  64,  128 },
-  clr[] = { ~1, ~2, ~4, ~8, ~16, ~32, ~64, ~128 };
+#if defined __AVR__
+  // 1<<n is a costly operation on AVR -- table usu. smaller & faster
+  static const uint8_t PROGMEM
+    set[] = {  1,  2,  4,  8,  16,  32,  64,  128 },
+    clr[] = { ~1, ~2, ~4, ~8, ~16, ~32, ~64, ~128 };
+#endif
 
 /**************************************************************************/
 /*! 
@@ -179,15 +223,24 @@ void Adafruit_SharpMem::drawPixel(int16_t x, int16_t y, uint16_t color)
     _swap_int16_t(x, y);
     y = HEIGHT - 1 - y;
     break;
+   default:
+    break;
   }
 
-  if(color) {
-    sharpmem_buffer[(y*SHARPMEM_LCDWIDTH + x) / 8] |=
-      pgm_read_byte(&set[x & 7]);
-  } else {
-    sharpmem_buffer[(y*SHARPMEM_LCDWIDTH + x) / 8] &=
-      pgm_read_byte(&clr[x & 7]);
-  }
+  #if defined __AVR__
+    if(color) {
+      sharpmem_buffer[(y*SHARPMEM_LCDWIDTH + x) / 8] |=
+        pgm_read_byte(&set[x & 7]);
+    } else {
+      sharpmem_buffer[(y*SHARPMEM_LCDWIDTH + x) / 8] &=
+        pgm_read_byte(&clr[x & 7]);
+    }
+  #else
+    if (color)
+      sharpmem_buffer[(y*SHARPMEM_LCDWIDTH + x) /8] |= (1 << x % 8);
+    else
+      sharpmem_buffer[(y*SHARPMEM_LCDWIDTH + x) /8] &= ~(1 << x % 8);
+  #endif
 }
 
 /**************************************************************************/
@@ -219,10 +272,16 @@ uint8_t Adafruit_SharpMem::getPixel(uint16_t x, uint16_t y)
     _swap_uint16_t(x, y);
     y = HEIGHT - 1 - y;
     break;
+   default:
+    break;
   }
 
-  return sharpmem_buffer[(y*SHARPMEM_LCDWIDTH + x) / 8] &
-    pgm_read_byte(&set[x & 7]) ? 1 : 0;
+  #if defined __AVR__
+    return sharpmem_buffer[(y*SHARPMEM_LCDWIDTH + x) / 8] &
+      pgm_read_byte(&set[x & 7]) ? 1 : 0;
+  #else
+    return sharpmem_buffer[(y*SHARPMEM_LCDWIDTH + x) /8] & (1 << x % 8) ? 1 : 0;
+  #endif
 }
 
 /**************************************************************************/
@@ -230,15 +289,34 @@ uint8_t Adafruit_SharpMem::getPixel(uint16_t x, uint16_t y)
     @brief Clears the screen
 */
 /**************************************************************************/
-void Adafruit_SharpMem::clearDisplay() 
+void Adafruit_SharpMem::clearDisplay(void) 
 {
   memset(sharpmem_buffer, 0xff, (SHARPMEM_LCDWIDTH * SHARPMEM_LCDHEIGHT) / 8);
+
+  if (_clk == -1)
+    SPI.beginTransaction(sharpmemSPI);
+
   // Send the clear screen command rather than doing a HW refresh (quicker)
-  digitalWrite(_ss, HIGH);
+  SPI_CS_ENABLE();
+  delayMicroseconds(SPI_DEFAULT_DELAY_US);
   sendbyte(_sharpmem_vcom | SHARPMEM_BIT_CLEAR);
-  sendbyteLSB(0x00);
+  sendbyte(SHARPMEM_BIT_DUMMY);
   TOGGLE_VCOM;
-  digitalWrite(_ss, LOW);
+  delayMicroseconds(SPI_DEFAULT_DELAY_US);
+  SPI_CS_DISABLE();
+
+  if (_clk == -1)
+    SPI.endTransaction();
+}
+
+/**************************************************************************/
+/*! 
+    @brief Clears the buffer, but not the screen
+*/
+/**************************************************************************/
+void Adafruit_SharpMem::clearBuffer(void)
+{
+  memset(sharpmem_buffer, 0xff, (SHARPMEM_LCDWIDTH * SHARPMEM_LCDHEIGHT) / 8);
 }
 
 /**************************************************************************/
@@ -251,33 +329,58 @@ void Adafruit_SharpMem::refresh(void)
   uint16_t i, totalbytes, currentline, oldline;  
   totalbytes = (SHARPMEM_LCDWIDTH * SHARPMEM_LCDHEIGHT) / 8;
 
+  if (_clk == -1)
+    SPI.beginTransaction(sharpmemSPI);
+
   // Send the write command
-  digitalWrite(_ss, HIGH);
+  SPI_CS_ENABLE();
+  delayMicroseconds(SPI_DEFAULT_DELAY_US);    
   sendbyte(SHARPMEM_BIT_WRITECMD | _sharpmem_vcom);
   TOGGLE_VCOM;
 
   // Send the address for line 1
   oldline = currentline = 1;
-  sendbyteLSB(currentline);
+  sendbyte(currentline);
 
   // Send image buffer
   for (i=0; i<totalbytes; i++)
   {
-    sendbyteLSB(sharpmem_buffer[i]);
+    sendbyte(sharpmem_buffer[i]);
     currentline = ((i+1)/(SHARPMEM_LCDWIDTH/8)) + 1;
     if(currentline != oldline)
     {
       // Send end of line and address bytes
-      sendbyteLSB(0x00);
+      sendbyte(SHARPMEM_BIT_DUMMY);
       if (currentline <= SHARPMEM_LCDHEIGHT)
       {
-        sendbyteLSB(currentline);
+        sendbyte(currentline);
       }
       oldline = currentline;
     }
   }
 
   // Send another trailing 8 bits for the last line
-  sendbyteLSB(0x00);
-  digitalWrite(_ss, LOW);
+  sendbyte(SHARPMEM_BIT_DUMMY);
+  delayMicroseconds(SPI_DEFAULT_DELAY_US);    
+  SPI_CS_DISABLE();
+
+  if (_clk == -1)
+    SPI.endTransaction();
+}
+
+void Adafruit_SharpMem::toggleVcom(void)
+{
+  if (_clk == -1)
+  SPI.beginTransaction(sharpmemSPI);
+
+  SPI_CS_ENABLE();
+  delayMicroseconds(SPI_DEFAULT_DELAY_US);    
+  sendbyte(SHARPMEM_BIT_WRITECMD | _sharpmem_vcom);
+  TOGGLE_VCOM;
+  sendbyte(SHARPMEM_BIT_DUMMY);
+  delayMicroseconds(SPI_DEFAULT_DELAY_US);    
+  SPI_CS_DISABLE();
+
+  if (_clk == -1)
+  SPI.endTransaction();
 }
